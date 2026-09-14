@@ -28,11 +28,9 @@
 .PARAMETER PauseMinutes
     Number of minutes to pause when throttling error occurs. Default: 10
     
-.PARAMETER SendReport
-    Switch to send the report via email
-    
 .PARAMETER ReportRecipient
-    Email address to send the report to (required if SendReport is used)
+    Email address or comma-separated list of email addresses to send the report to. 
+    When provided, report and XML file will be sent via email.
     
 .PARAMETER SMTPServer
     SMTP server address. Default: "appsmtp.ottawa.ca"
@@ -42,7 +40,7 @@
     Get-MessageTraceMisha -InputTable $messageIds -MessageIDColumn "MessageID" -OutputPath "C:\Reports" -Verbose
     
 .EXAMPLE
-    Get-MessageTraceMisha -InputTable $messageIds -StartDate (Get-Date).AddDays(-5) -EndDate (Get-Date) -SendReport -ReportRecipient "admin@company.com" -PauseMinutes 15 -Verbose
+    Get-MessageTraceMisha -InputTable $messageIds -StartDate (Get-Date).AddDays(-5) -EndDate (Get-Date) -ReportRecipient "admin@company.com" -PauseMinutes 15 -Verbose
     
 .NOTES
     Author: Mikhail Rykov
@@ -73,9 +71,6 @@ param(
     [int]$PauseMinutes = 10,
     
     [Parameter(Mandatory=$false)]
-    [switch]$SendReport,
-    
-    [Parameter(Mandatory=$false)]
     [string]$ReportRecipient,
     
     [Parameter(Mandatory=$false)]
@@ -92,9 +87,17 @@ $retryAttempts = @{}
 $maxRetries = 3
 $scriptStartTime = Get-Date
 
+# Generate unique random Progress IDs
+$progressIdMain = Get-Random -Minimum 1000 -Maximum 9999
+do {
+    $progressIdPause = Get-Random -Minimum 1000 -Maximum 9999
+} while ($progressIdPause -eq $progressIdMain)
+
 Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Script execution started"
 Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Start Date: $($StartDate.ToString('yyyy-MM-dd HH:mm:ss'))"
 Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] End Date: $($EndDate.ToString('yyyy-MM-dd HH:mm:ss'))"
+Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Progress ID (Main): $progressIdMain"
+Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Progress ID (Pause): $progressIdPause"
 
 # Validate date parameters
 Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Validating date parameters..."
@@ -103,6 +106,59 @@ if ($EndDate -le $StartDate) {
     return
 }
 Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Date validation passed"
+
+# Validate ReportRecipient if provided
+Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Validating ReportRecipient parameter..."
+$validatedRecipients = @()
+if ($ReportRecipient) {
+    $recipientList = $ReportRecipient -split ',' | ForEach-Object { $_.Trim() }
+    Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Found $($recipientList.Count) recipient(s) to validate"
+    
+    $emailPattern = '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    
+    foreach ($recipient in $recipientList) {
+        if ($recipient -match $emailPattern) {
+            $validatedRecipients += $recipient
+            Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Recipient validated: $recipient"
+        }
+        else {
+            Write-Error "Invalid email address format: $recipient"
+            return
+        }
+    }
+    
+    if ($validatedRecipients.Count -eq 0) {
+        Write-Error "No valid email addresses provided in ReportRecipient parameter"
+        return
+    }
+    Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] All $($validatedRecipients.Count) recipient(s) validated successfully"
+}
+
+# Validate SMTP Server connectivity
+Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Validating SMTP server connectivity..."
+if ($ReportRecipient) {
+    Write-Host "Testing SMTP connectivity to $SMTPServer..." -ForegroundColor Cyan
+    
+    try {
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Attempting to connect to $SMTPServer on port 25..."
+        $tcpClient.Connect($SMTPServer, 25)
+        
+        if ($tcpClient.Connected) {
+            Write-Host "✓ SMTP server $SMTPServer is responding on port 25" -ForegroundColor Green
+            Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] SMTP server connection successful"
+            $tcpClient.Close()
+        }
+        else {
+            throw "Unable to connect to SMTP server"
+        }
+    }
+    catch {
+        Write-Warning "SMTP server $SMTPServer is not responding on port 25: $_"
+        Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] SMTP connectivity test failed: $_"
+        Write-Host "Continuing with script execution. Email delivery may fail." -ForegroundColor Yellow
+    }
+}
 
 # Get total message count
 $totalCount = @($InputTable).Count
@@ -132,12 +188,12 @@ Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Starting message processing loop
 for ($i = 0; $i -lt $totalCount; $i++) {
     $rawMessageId = $InputTable[$i].$MessageIDColumn
     
-    # Remove angle brackets if present
-    $messageId = $rawMessageId -replace '^<|>$', ''
-    Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$i] Raw MessageID: '$rawMessageId' | Cleaned MessageID: '$messageId'"
+    # Remove angle brackets from display/logging but keep original for query
+    $displayMessageId = $rawMessageId -replace '^<|>$', ''
+    Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$i] Raw MessageID: '$rawMessageId' | Display MessageID: '$displayMessageId'"
     
-    if ($rawMessageId -ne $messageId) {
-        Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$i] Angle brackets removed from MessageID"
+    if ($rawMessageId -ne $displayMessageId) {
+        Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$i] Angle brackets detected in MessageID (for display only)"
     }
     
     $currentNumber = $i + 1
@@ -146,25 +202,25 @@ for ($i = 0; $i -lt $totalCount; $i++) {
     Write-Progress -Activity "Processing Message Traces" `
                    -Status "Message $currentNumber of $totalCount" `
                    -PercentComplete (($currentNumber / $totalCount) * 100) `
-                   -CurrentOperation "MessageID: $messageId" `
-                   -Id 1
+                   -CurrentOperation "MessageID: $displayMessageId" `
+                   -Id $progressIdMain
     
-    Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] Processing MessageID: $messageId"
+    Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] Processing MessageID: $rawMessageId"
     
     # Initialize retry count for this message if not exists
-    if (-not $retryAttempts.ContainsKey($messageId)) {
-        $retryAttempts[$messageId] = 0
+    if (-not $retryAttempts.ContainsKey($rawMessageId)) {
+        $retryAttempts[$rawMessageId] = 0
     }
     
     $querySuccessful = $false
     
-    while ($retryAttempts[$messageId] -le $maxRetries -and -not $querySuccessful) {
+    while ($retryAttempts[$rawMessageId] -le $maxRetries -and -not $querySuccessful) {
         try {
-            Write-Host "[$currentNumber/$totalCount] Querying MessageID: $messageId" -ForegroundColor White
-            Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] Executing Get-MessageTraceV2 for MessageID: $messageId (Attempt: $($retryAttempts[$messageId] + 1))"
+            Write-Host "[$currentNumber/$totalCount] Querying MessageID: $displayMessageId" -ForegroundColor White
+            Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] Executing Get-MessageTraceV2 for MessageID: $rawMessageId (Attempt: $($retryAttempts[$rawMessageId] + 1))"
             
-            # Execute Get-MessageTraceV2 with date range
-            $trace = Get-MessageTraceV2 -MessageId $messageId `
+            # Execute Get-MessageTraceV2 with date range - use original MessageID
+            $trace = Get-MessageTraceV2 -MessageId $rawMessageId `
                                        -StartDate $StartDate `
                                        -EndDate $EndDate `
                                        -ErrorAction Stop
@@ -174,11 +230,11 @@ for ($i = 0; $i -lt $totalCount; $i++) {
                 $successCount++
                 $querySuccessful = $true
                 Write-Host "  ✓ Successfully retrieved trace" -ForegroundColor Green
-                Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] Successfully retrieved trace for MessageID: $messageId. Total results: $($results.Count)"
+                Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] Successfully retrieved trace for MessageID: $rawMessageId. Total results: $($results.Count)"
             }
             else {
-                Write-Warning "  ⚠ No trace data returned for MessageID: $messageId"
-                Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] No trace data found for MessageID: $messageId in the specified date range"
+                Write-Warning "  ⚠ No trace data returned for MessageID: $displayMessageId"
+                Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] No trace data found for MessageID: $rawMessageId in the specified date range"
                 $failureCount++
                 $querySuccessful = $true
             }
@@ -205,36 +261,36 @@ for ($i = 0; $i -lt $totalCount; $i++) {
                                    -SecondsRemaining $countdown `
                                    -PercentComplete $percentComplete `
                                    -CurrentOperation "Time remaining: ${minutes}m ${seconds}s" `
-                                   -Id 2
+                                   -Id $progressIdPause
                     Start-Sleep -Seconds 1
                 }
-                Write-Progress -Activity "Rate Limit Pause" -Completed -Id 2
+                Write-Progress -Activity "Rate Limit Pause" -Completed -Id $progressIdPause
                 Write-Host "  ✓ Resuming queries..." -ForegroundColor Green
                 Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] Pause completed. Resuming queries"
-                $retryAttempts[$messageId]++
+                $retryAttempts[$rawMessageId]++
             }
             else {
                 # Non-throttling error
-                Write-Host "  ✗ Error querying MessageID $messageId : $errorMessage" -ForegroundColor Red
-                Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] Non-throttling error for MessageID: $messageId. Adding to failed list"
-                $failedMessageIds += $messageId
+                Write-Host "  ✗ Error querying MessageID $displayMessageId : $errorMessage" -ForegroundColor Red
+                Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] Non-throttling error for MessageID: $rawMessageId. Adding to failed list"
+                $failedMessageIds += $rawMessageId
                 $failureCount++
                 $querySuccessful = $true
             }
         }
     }
     
-    if ($retryAttempts[$messageId] -gt $maxRetries) {
-        Write-Host "  ✗ Max retries exceeded for MessageID: $messageId" -ForegroundColor Red
-        Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] Max retries ($maxRetries) exceeded for MessageID: $messageId"
-        if ($messageId -notin $failedMessageIds) {
-            $failedMessageIds += $messageId
+    if ($retryAttempts[$rawMessageId] -gt $maxRetries) {
+        Write-Host "  ✗ Max retries exceeded for MessageID: $displayMessageId" -ForegroundColor Red
+        Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] [$currentNumber/$totalCount] Max retries ($maxRetries) exceeded for MessageID: $rawMessageId"
+        if ($rawMessageId -notin $failedMessageIds) {
+            $failedMessageIds += $rawMessageId
             $failureCount++
         }
     }
 }
 
-Write-Progress -Activity "Processing Message Traces" -Completed -Id 1
+Write-Progress -Activity "Processing Message Traces" -Completed -Id $progressIdMain
 Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Message processing loop completed"
 
 # Export results to XML
@@ -312,20 +368,14 @@ Write-Host ("="*60) -ForegroundColor Cyan
 Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Displaying summary statistics"
 Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Script execution time: $((Get-Date) - $scriptStartTime)"
 
-# Send email report if requested
-if ($SendReport) {
-    if (-not $ReportRecipient) {
-        Write-Error "ReportRecipient parameter is required when using SendReport switch"
-        Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] SendReport requested but ReportRecipient not provided"
-        return
-    }
-    
+# Send email report if recipient is provided
+if ($validatedRecipients.Count -gt 0) {
     Write-Host "`nSending email report..." -ForegroundColor Cyan
-    Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Starting email report process to: $ReportRecipient"
+    Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Starting email report process to: $($validatedRecipients -join ', ')"
     
     try {
         $emailParams = @{
-            To = $ReportRecipient
+            To = $validatedRecipients
             Subject = "Message Trace Report - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
             SmtpServer = $SMTPServer
             From = "$([Environment]::UserName)@ottawa.ca"
@@ -333,7 +383,7 @@ if ($SendReport) {
             Attachments = @($fullOutputPath)
         }
         
-        Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Email parameters configured: From=$($emailParams['From']), To=$($emailParams['To']), SmtpServer=$SMTPServer"
+        Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Email parameters configured: From=$($emailParams['From']), To=$($emailParams['To'] -join ', '), SmtpServer=$SMTPServer"
         
         $emailBody = @"
 Message Trace Query Report
@@ -370,8 +420,8 @@ This report was generated by Get-MessageTraceMisha script.
         
         Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Sending email via $SMTPServer"
         Send-MailMessage @emailParams
-        Write-Host "✓ Email report sent to $ReportRecipient" -ForegroundColor Green
-        Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Email report successfully sent to $ReportRecipient"
+        Write-Host "✓ Email report sent to: $($validatedRecipients -join ', ')" -ForegroundColor Green
+        Write-Verbose "[$(Get-Date -Format 'HH:mm:ss')] Email report successfully sent to $($validatedRecipients -join ', ')"
     }
     catch {
         Write-Error "Error sending email report: $_"
