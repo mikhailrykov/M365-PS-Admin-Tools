@@ -3,8 +3,9 @@
     Finds unlicensed Exchange Online mailboxes with Litigation Hold or In-Place Holds.
 
 .DESCRIPTION
-    Connects to Microsoft Graph first, then Exchange Online, to avoid a known dependency
-    assembly conflict between Microsoft.Graph.Authentication and ExchangeOnlineManagement.
+    Connects to Microsoft Graph first, then Exchange Online with WAM disabled when
+    supported, to avoid a known dependency assembly conflict between
+    Microsoft.Graph.Authentication and ExchangeOnlineManagement.
 
     The script:
       * Finds Litigation Hold mailboxes and active In-Place Holds.
@@ -19,6 +20,8 @@
       * Only connections created by this script are disconnected at completion.
       * If an existing Graph connection lacks User.Read.All, the script stops rather
         than replacing or disconnecting the pre-existing connection.
+      * Exchange authentication uses the Graph-first pattern and, when the installed
+        module version supports it, passes -DisableWAM to Connect-ExchangeOnline.
 
 .PARAMETER DisableLitigationHold
     Disable Litigation Hold for qualifying unlicensed mailboxes.
@@ -256,8 +259,22 @@ function Connect-ExchangeService {
         return $false
     }
 
-    Write-Host "[*] Connecting to Exchange Online..." -ForegroundColor Cyan
-    Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+    $connectCommand = Get-Command Connect-ExchangeOnline -ErrorAction SilentlyContinue
+    $connectParameters = @{
+        ShowBanner = $false
+        ErrorAction = 'Stop'
+    }
+
+    if ($null -ne $connectCommand -and $connectCommand.Parameters.ContainsKey('DisableWAM')) {
+        $connectParameters['DisableWAM'] = $true
+        Write-Verbose "Connect-ExchangeOnline supports -DisableWAM; using it to avoid the Graph/EXO auth assembly conflict."
+    }
+    else {
+        Write-Warning "Connect-ExchangeOnline does not support -DisableWAM. Update ExchangeOnlineManagement if authentication fails. Continuing without it."
+    }
+
+    Write-Host "[*] Connecting to Exchange Online after Microsoft Graph..." -ForegroundColor Cyan
+    Connect-ExchangeOnline @connectParameters
     Write-Host "[+] Exchange Online: connected." -ForegroundColor Green
     return $true
 }
