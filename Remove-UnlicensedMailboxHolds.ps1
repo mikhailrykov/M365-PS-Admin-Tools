@@ -552,10 +552,10 @@ if ($litigationHoldWasSpecified -xor $inPlaceHoldWasSpecified) {
         $DisableLitigationHold = $false
     }
 }
-elif ($litigationHoldWasSpecified -and $inPlaceHoldWasSpecified) {
+elseif ($litigationHoldWasSpecified -and $inPlaceHoldWasSpecified) {
     $DisableAllHolds = [bool]($DisableLitigationHold -and $DisableInPlaceHold)
 }
-elif ($DisableAllHolds) {
+elseif ($DisableAllHolds) {
     $DisableLitigationHold = $true
     $DisableInPlaceHold = $true
 }
