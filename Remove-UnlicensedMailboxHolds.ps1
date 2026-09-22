@@ -322,6 +322,7 @@ function Get-InPlaceHoldsForMailbox {
         [string]$UserPrincipalName,
 
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [object[]]$AllInPlaceHolds
     )
 
