@@ -825,7 +825,7 @@ try {
             LitigationHoldStatus = $litigationStatus
             HasInPlaceHold       = $hasInPlaceHold
             InPlaceHoldCount     = $matchingInPlaceHolds.Count
-            InPlaceHoldNames     = ($matchingInPlaceHolds.Name -join '; ')
+            InPlaceHoldNames     = (@($matchingInPlaceHolds | ForEach-Object { $_.Name }) -join '; ')
             InPlaceHoldActions   = ($inPlaceActions -join ' | ')
         })
     }
