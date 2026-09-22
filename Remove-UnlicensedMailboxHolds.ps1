@@ -46,6 +46,7 @@
 
 .PARAMETER ReportTo
     One or more report recipients. Providing this parameter enables email reporting.
+    Each entry must be a plain email address in the form user@example.com.
 
 .PARAMETER ReportFrom
     Sender address for the SMTP relay. Must be a valid email address. When omitted,
@@ -173,6 +174,66 @@ function Assert-CommandAvailable {
     if (-not (Get-Command -Name $CommandName -ErrorAction SilentlyContinue)) {
         throw "Required command '$CommandName' is unavailable after loading '$ModuleName'. Reinstall or update module '$ModuleName'."
     }
+}
+
+function Assert-ValidEmailAddress {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Address,
+
+        [Parameter(Mandatory)]
+        [string]$ParameterName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Address)) {
+        throw "$ParameterName is empty. Provide a plain email address such as user@example.com."
+    }
+
+    $trimmed = $Address.Trim()
+
+    try {
+        $parsedAddress = [System.Net.Mail.MailAddress]::new($trimmed)
+    }
+    catch {
+        throw "$ParameterName '$Address' is not a valid email address. Use a plain address such as user@example.com."
+    }
+
+    if ($parsedAddress.Address -ine $trimmed) {
+        throw "$ParameterName '$Address' is not a valid plain email address. Display-name formats such as 'Name <user@example.com>' are not supported."
+    }
+
+    return $trimmed
+}
+
+function Assert-ValidEmailAddressList {
+    param(
+        [Parameter()]
+        [string[]]$Addresses,
+
+        [Parameter(Mandatory)]
+        [string]$ParameterName
+    )
+
+    if ($null -eq $Addresses) {
+        return @()
+    }
+
+    $normalized = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($candidate in $Addresses) {
+        if ($null -eq $candidate) {
+            continue
+        }
+
+        $trimmed = $candidate.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) {
+            throw "$ParameterName contains an empty entry. Each address must be a plain email address such as user@example.com."
+        }
+
+        $normalized.Add((Assert-ValidEmailAddress -Address $trimmed -ParameterName $ParameterName))
+    }
+
+    return @($normalized)
 }
 
 function Get-GraphConnectionState {
@@ -511,19 +572,14 @@ if ([string]::IsNullOrWhiteSpace($ReportFrom)) {
 
     $ReportFrom = '{0}@{1}' -f $env:USERNAME.Trim(), $env:USERDNSDOMAIN.Trim()
 }
-else {
-    $ReportFrom = $ReportFrom.Trim()
-}
 
-try {
-    $parsedReportFrom = [System.Net.Mail.MailAddress]::new($ReportFrom)
-}
-catch {
-    throw "ReportFrom '$ReportFrom' is not a valid email address. Specify an address such as user@example.com."
-}
+$ReportFrom = Assert-ValidEmailAddress -Address $ReportFrom -ParameterName 'ReportFrom'
 
-if ($parsedReportFrom.Address -ine $ReportFrom) {
-    throw "ReportFrom '$ReportFrom' is not a valid plain email address. Specify an address such as user@example.com."
+if ($PSBoundParameters.ContainsKey('ReportTo')) {
+    $ReportTo = Assert-ValidEmailAddressList -Addresses $ReportTo -ParameterName 'ReportTo'
+    if ($ReportTo.Count -eq 0) {
+        throw "ReportTo was provided, but no valid recipient addresses were supplied. Use plain email addresses such as user@example.com."
+    }
 }
 
 if ($SkipConfirmation) {
