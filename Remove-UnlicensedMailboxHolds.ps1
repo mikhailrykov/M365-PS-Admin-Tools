@@ -7,6 +7,10 @@
     supported, to avoid a known dependency assembly conflict between
     Microsoft.Graph.Authentication and ExchangeOnlineManagement.
 
+    By default, both Litigation Hold and In-Place Hold remediation are enabled.
+    Specify only -DisableLitigationHold or only -DisableInPlaceHold to limit
+    remediation to that hold type. Use -DisableAllHolds:$false for report-only mode.
+
     The script:
       * Finds Litigation Hold mailboxes and active In-Place Holds.
       * Checks affected user accounts for assigned Microsoft 365 licenses through Graph.
@@ -24,13 +28,17 @@
         module version supports it, passes -DisableWAM to Connect-ExchangeOnline.
 
 .PARAMETER DisableLitigationHold
-    Disable Litigation Hold for qualifying unlicensed mailboxes.
+    Disable Litigation Hold for qualifying unlicensed mailboxes. When supplied by
+    itself, In-Place Hold remediation and DisableAllHolds are disabled.
 
 .PARAMETER DisableInPlaceHold
-    Remove qualifying unlicensed mailboxes from non-org-wide In-Place Holds.
+    Remove qualifying unlicensed mailboxes from non-org-wide In-Place Holds. When
+    supplied by itself, Litigation Hold remediation and DisableAllHolds are disabled.
 
 .PARAMETER DisableAllHolds
-    Equivalent to specifying both -DisableLitigationHold and -DisableInPlaceHold.
+    Enable both Litigation Hold and In-Place Hold remediation. Defaults to true.
+    Specify -DisableAllHolds:$false for report-only mode when neither individual
+    remediation switch is supplied.
 
 .PARAMETER ExportCsv
     Optional destination for the CSV report. If omitted while -ReportTo is provided,
@@ -40,7 +48,8 @@
     One or more report recipients. Providing this parameter enables email reporting.
 
 .PARAMETER ReportFrom
-    Sender address for the SMTP relay.
+    Sender address for the SMTP relay. Must be a valid email address. When omitted,
+    defaults to USERNAME@USERDNSDOMAIN from the current environment.
 
 .PARAMETER ReportSubject
     Subject for the emailed report.
@@ -53,18 +62,21 @@
     changes to Litigation Holds or In-Place Holds.
 
 .EXAMPLE
-    # Report only; no remediation and no email.
-    .\Remove-UnlicensedMailboxHolds.ps1
+    # Safely preview the default remediation of both hold types.
+    .\Remove-UnlicensedMailboxHolds.ps1 -WhatIf
 
 .EXAMPLE
-    # Full discovery and email report, but make no changes.
-    .\Remove-UnlicensedMailboxHolds.ps1 -WhatIf -DisableAllHolds `
+    # Report only; no remediation.
+    .\Remove-UnlicensedMailboxHolds.ps1 -DisableAllHolds:$false
+
+.EXAMPLE
+    # Preview Litigation Hold remediation only and email the report.
+    .\Remove-UnlicensedMailboxHolds.ps1 -WhatIf -DisableLitigationHold `
         -ReportTo rykov@ottawa.ca
 
 .EXAMPLE
-    # Apply remediation without interactive confirmation and send a report.
-    .\Remove-UnlicensedMailboxHolds.ps1 -DisableAllHolds -SkipConfirmation `
-        -ReportTo rykov@ottawa.ca
+    # Apply both remediation types without interactive confirmation and send a report.
+    .\Remove-UnlicensedMailboxHolds.ps1 -SkipConfirmation -ReportTo rykov@ottawa.ca
 
 .NOTES
     Required modules:
@@ -84,13 +96,13 @@
 param (
     [switch]$DisableLitigationHold,
     [switch]$DisableInPlaceHold,
-    [switch]$DisableAllHolds,
+    [switch]$DisableAllHolds = $true,
 
     [string]$ExportCsv,
 
     [string[]]$ReportTo,
 
-    [string]$ReportFrom = 'copilot-noreply@ottawa.ca',
+    [string]$ReportFrom,
 
     [string]$ReportSubject = "Unlicensed Mailbox Holds Report — $(Get-Date -Format 'yyyy-MM-dd HH:mm')",
 
@@ -465,9 +477,53 @@ The attached CSV contains the full report.
 
 #region Initialization
 
-if ($DisableAllHolds) {
+$litigationHoldWasSpecified = $PSBoundParameters.ContainsKey('DisableLitigationHold')
+$inPlaceHoldWasSpecified = $PSBoundParameters.ContainsKey('DisableInPlaceHold')
+
+if ($litigationHoldWasSpecified -xor $inPlaceHoldWasSpecified) {
+    # An explicitly supplied individual switch overrides the all-holds default.
+    $DisableAllHolds = $false
+
+    if ($litigationHoldWasSpecified) {
+        $DisableInPlaceHold = $false
+    }
+    else {
+        $DisableLitigationHold = $false
+    }
+}
+elif ($litigationHoldWasSpecified -and $inPlaceHoldWasSpecified) {
+    $DisableAllHolds = [bool]($DisableLitigationHold -and $DisableInPlaceHold)
+}
+elif ($DisableAllHolds) {
     $DisableLitigationHold = $true
     $DisableInPlaceHold = $true
+}
+else {
+    $DisableLitigationHold = $false
+    $DisableInPlaceHold = $false
+}
+
+if ([string]::IsNullOrWhiteSpace($ReportFrom)) {
+    if ([string]::IsNullOrWhiteSpace($env:USERNAME) -or
+        [string]::IsNullOrWhiteSpace($env:USERDNSDOMAIN)) {
+        throw "ReportFrom was not provided and USERNAME or USERDNSDOMAIN is unavailable. Specify -ReportFrom with a valid email address."
+    }
+
+    $ReportFrom = '{0}@{1}' -f $env:USERNAME.Trim(), $env:USERDNSDOMAIN.Trim()
+}
+else {
+    $ReportFrom = $ReportFrom.Trim()
+}
+
+try {
+    $parsedReportFrom = [System.Net.Mail.MailAddress]::new($ReportFrom)
+}
+catch {
+    throw "ReportFrom '$ReportFrom' is not a valid email address. Specify an address such as user@example.com."
+}
+
+if ($parsedReportFrom.Address -ine $ReportFrom) {
+    throw "ReportFrom '$ReportFrom' is not a valid plain email address. Specify an address such as user@example.com."
 }
 
 if ($SkipConfirmation) {
@@ -723,6 +779,12 @@ try {
     $mode = switch ($true) {
         ($WhatIfPreference -and $DisableLitigationHold -and $DisableInPlaceHold) {
             'WhatIf — all holds would be remediated'
+        }
+        ($WhatIfPreference -and $DisableLitigationHold) {
+            'WhatIf — Litigation Hold remediation only'
+        }
+        ($WhatIfPreference -and $DisableInPlaceHold) {
+            'WhatIf — In-Place Hold remediation only'
         }
         ($WhatIfPreference) {
             'WhatIf — no changes made'
