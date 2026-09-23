@@ -41,8 +41,10 @@
     remediation switch is supplied.
 
 .PARAMETER ExportCsv
-    Optional destination for the CSV report. If omitted while -ReportTo is provided,
-    a temporary CSV is created, emailed, and removed.
+    Optional destination for the CSV report. When supplied explicitly, the CSV file
+    is always kept after the script completes, regardless of -WhatIf. If omitted
+    while -ReportTo is provided, a temporary CSV is created, emailed, and then
+    removed automatically.
 
 .PARAMETER ReportTo
     One or more report recipients. Providing this parameter enables email reporting.
@@ -59,8 +61,9 @@
     Suppress confirmation prompts for changes. Intended for unattended execution.
 
 .PARAMETER WhatIf
-    Performs discovery, CSV generation, and optional email reporting, but makes no
-    changes to Litigation Holds or In-Place Holds.
+    Prevents changes to Litigation Holds or In-Place Holds (Set-Mailbox and
+    Set-MailboxSearch are not invoked). Discovery, CSV export, and email reporting
+    still run normally so a preview report can be produced and delivered.
 
 .EXAMPLE
     # Safely preview the default remediation of both hold types.
@@ -589,10 +592,14 @@ if ($SkipConfirmation) {
 
 $sendReport = $PSBoundParameters.ContainsKey('ReportTo') -and $ReportTo.Count -gt 0
 
+# An explicitly supplied -ExportCsv destination is always retained. Only a CSV
+# that this script creates automatically (because -ReportTo was given without
+# -ExportCsv) is treated as temporary and removed after the report is sent.
+$userProvidedCsv = $PSBoundParameters.ContainsKey('ExportCsv') -and -not [string]::IsNullOrWhiteSpace($ExportCsv)
 $temporaryCsv = $false
-$effectiveCsv = $ExportCsv
+$effectiveCsv = if ($userProvidedCsv) { $ExportCsv } else { $null }
 
-if ($sendReport -and [string]::IsNullOrWhiteSpace($effectiveCsv)) {
+if ($sendReport -and -not $userProvidedCsv) {
     $effectiveCsv = Join-Path ([System.IO.Path]::GetTempPath()) (
         "UnlicensedMailboxHolds-{0}.csv" -f (Get-Date -Format 'yyyyMMdd-HHmmss')
     )
@@ -832,32 +839,36 @@ try {
 
     Write-Progress -Id 2 -Activity 'Processing unlicensed mailboxes' -Completed
 
-    $mode = switch ($true) {
-        ($WhatIfPreference -and $DisableLitigationHold -and $DisableInPlaceHold) {
-            'WhatIf — all holds would be remediated'
-        }
-        ($WhatIfPreference -and $DisableLitigationHold) {
-            'WhatIf — Litigation Hold remediation only'
-        }
-        ($WhatIfPreference -and $DisableInPlaceHold) {
-            'WhatIf — In-Place Hold remediation only'
-        }
-        ($WhatIfPreference) {
-            'WhatIf — no changes made'
-        }
-        ($DisableLitigationHold -and $DisableInPlaceHold) {
-            'Litigation and In-Place Hold remediation'
-        }
-        $DisableLitigationHold {
-            'Litigation Hold remediation only'
-        }
-        $DisableInPlaceHold {
-            'In-Place Hold remediation only'
-        }
-        default {
-            'Report only'
-        }
+    # NOTE: Using if/elseif instead of `switch ($true) { ... }` guarantees $mode is
+    # always a single scalar string. The prior switch-based assignment could bind an
+    # array in some execution paths, which broke Send-HoldReport's [string]$Mode
+    # parameter conversion.
+    if ($WhatIfPreference -and $DisableLitigationHold -and $DisableInPlaceHold) {
+        $mode = 'WhatIf — all holds would be remediated'
     }
+    elseif ($WhatIfPreference -and $DisableLitigationHold) {
+        $mode = 'WhatIf — Litigation Hold remediation only'
+    }
+    elseif ($WhatIfPreference -and $DisableInPlaceHold) {
+        $mode = 'WhatIf — In-Place Hold remediation only'
+    }
+    elseif ($WhatIfPreference) {
+        $mode = 'WhatIf — no changes made'
+    }
+    elseif ($DisableLitigationHold -and $DisableInPlaceHold) {
+        $mode = 'Litigation and In-Place Hold remediation'
+    }
+    elseif ($DisableLitigationHold) {
+        $mode = 'Litigation Hold remediation only'
+    }
+    elseif ($DisableInPlaceHold) {
+        $mode = 'In-Place Hold remediation only'
+    }
+    else {
+        $mode = 'Report only'
+    }
+
+    $mode = [string]$mode
 
     Write-Host "`n========== RESULTS ==========" -ForegroundColor Cyan
     Write-Host "[*] Mode      : $mode"
@@ -872,6 +883,8 @@ try {
         Write-Host "[+] No unlicensed mailboxes with holds were found." -ForegroundColor Green
     }
 
+    # CSV export and email reporting run regardless of -WhatIf; only the mailbox
+    # and hold mutations above are gated by ShouldProcess/$WhatIfPreference.
     if (-not [string]::IsNullOrWhiteSpace($effectiveCsv)) {
         $results | Export-Csv -Path $effectiveCsv -NoTypeInformation -Encoding utf8
         Write-Host "[+] CSV report created: $effectiveCsv" -ForegroundColor Green
@@ -897,6 +910,8 @@ try {
     return $results
 }
 finally {
+    # Only remove CSVs that this script created automatically. A user-supplied
+    # -ExportCsv destination is always kept, WhatIf or not.
     if ($temporaryCsv -and $effectiveCsv -and (Test-Path -LiteralPath $effectiveCsv)) {
         Remove-Item -LiteralPath $effectiveCsv -Force -ErrorAction SilentlyContinue
         Write-Verbose "Temporary CSV removed: $effectiveCsv"
