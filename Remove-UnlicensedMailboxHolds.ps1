@@ -526,6 +526,10 @@ The attached CSV contains the full report.
         $Subject
     }
 
+    # Sending the report is a notification, not a hold/mutation change, so it
+    # must not be suppressed by an inherited -WhatIf from the script's own
+    # ShouldProcess/CmdletBinding. -WhatIf:$false forces it to run regardless
+    # of $WhatIfPreference.
     Send-MailMessage `
         -SmtpServer 'appsmtp.ottawa.ca' `
         -From $From `
@@ -534,6 +538,7 @@ The attached CSV contains the full report.
         -Body $body `
         -Attachments $CsvPath `
         -Encoding ([System.Text.Encoding]::UTF8) `
+        -WhatIf:$false `
         -ErrorAction Stop
 }
 
@@ -885,8 +890,11 @@ try {
 
     # CSV export and email reporting run regardless of -WhatIf; only the mailbox
     # and hold mutations above are gated by ShouldProcess/$WhatIfPreference.
+    # -WhatIf:$false is required because Export-Csv otherwise inherits the
+    # script's own $WhatIfPreference and silently no-ops (it only prints
+    # "What if: Performing the operation..." and never writes the file).
     if (-not [string]::IsNullOrWhiteSpace($effectiveCsv)) {
-        $results | Export-Csv -Path $effectiveCsv -NoTypeInformation -Encoding utf8
+        $results | Export-Csv -Path $effectiveCsv -NoTypeInformation -Encoding utf8 -WhatIf:$false
         Write-Host "[+] CSV report created: $effectiveCsv" -ForegroundColor Green
     }
 
