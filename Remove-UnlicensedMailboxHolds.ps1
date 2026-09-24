@@ -882,7 +882,7 @@ try {
     if ($results.Count -gt 0) {
         $results | Format-Table DisplayName, UserPrincipalName, HasLitigationHold,
             HasInPlaceHold, InPlaceHoldCount, LitigationHoldStatus,
-            InPlaceHoldActions -AutoSize
+            InPlaceHoldActions -AutoSize | Out-Host
     }
     else {
         Write-Host "[+] No unlicensed mailboxes with holds were found." -ForegroundColor Green
