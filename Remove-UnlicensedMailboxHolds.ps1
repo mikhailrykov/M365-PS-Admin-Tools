@@ -526,20 +526,26 @@ The attached CSV contains the full report.
         $Subject
     }
 
-    # Sending the report is a notification, not a hold/mutation change, so it
-    # must not be suppressed by an inherited -WhatIf from the script's own
-    # ShouldProcess/CmdletBinding. -WhatIf:$false forces it to run regardless
-    # of $WhatIfPreference.
-    Send-MailMessage `
-        -SmtpServer 'appsmtp.ottawa.ca' `
-        -From $From `
-        -To $To `
-        -Subject $emailSubject `
-        -Body $body `
-        -Attachments $CsvPath `
-        -Encoding ([System.Text.Encoding]::UTF8) `
-        -WhatIf:$false `
-        -ErrorAction Stop
+    $previousWhatIfPreference = $WhatIfPreference
+    try {
+        $WhatIfPreference = $false
+
+        # Send-MailMessage in this environment does not accept -WhatIf. Temporarily
+        # disabling the script-level WhatIf preference prevents inherited WhatIf
+        # suppression without changing the actual hold-remediation behavior.
+        Send-MailMessage `
+            -SmtpServer 'appsmtp.ottawa.ca' `
+            -From $From `
+            -To $To `
+            -Subject $emailSubject `
+            -Body $body `
+            -Attachments $CsvPath `
+            -Encoding ([System.Text.Encoding]::UTF8) `
+            -ErrorAction Stop
+    }
+    finally {
+        $WhatIfPreference = $previousWhatIfPreference
+    }
 }
 
 #endregion
@@ -609,6 +615,17 @@ if ($sendReport -and -not $userProvidedCsv) {
         "UnlicensedMailboxHolds-{0}.csv" -f (Get-Date -Format 'yyyyMMdd-HHmmss')
     )
     $temporaryCsv = $true
+}
+elseif ($userProvidedCsv) {
+    $directory = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($ExportCsv))
+    if ([string]::IsNullOrWhiteSpace($directory)) {
+        $directory = (Get-Location).Path
+    }
+
+    $fileName = [System.IO.Path]::GetFileNameWithoutExtension($ExportCsv)
+    $extension = [System.IO.Path]::GetExtension($ExportCsv)
+    $timestamp = Get-Date -Format 'yyyyMMdd HHmm'
+    $effectiveCsv = Join-Path $directory ("{0} {1}{2}" -f $fileName, $timestamp, $extension)
 }
 
 $graphConnectedByScript = $false
@@ -875,18 +892,8 @@ try {
 
     $mode = [string]$mode
 
-    Write-Host "`n========== RESULTS ==========" -ForegroundColor Cyan
-    Write-Host "[*] Mode      : $mode"
-    Write-Host "[*] Mailboxes : $($results.Count)"
-
-    if ($results.Count -gt 0) {
-        $results | Format-Table DisplayName, UserPrincipalName, HasLitigationHold,
-            HasInPlaceHold, InPlaceHoldCount, LitigationHoldStatus,
-            InPlaceHoldActions -AutoSize | Out-Host
-    }
-    else {
-        Write-Host "[+] No unlicensed mailboxes with holds were found." -ForegroundColor Green
-    }
+    # Do not write the result-set summary to the host. The script's output is the
+    # actual $results collection returned at the end.
 
     # CSV export and email reporting run regardless of -WhatIf; only the mailbox
     # and hold mutations above are gated by ShouldProcess/$WhatIfPreference.
