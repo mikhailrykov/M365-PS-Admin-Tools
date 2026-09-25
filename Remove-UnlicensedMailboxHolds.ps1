@@ -517,7 +517,10 @@ function Send-HoldReport {
         [string]$Mode,
 
         [Parameter(Mandatory)]
-        [int]$ResultCount
+        [int]$ResultCount,
+
+        [Parameter(Mandatory)]
+        [string]$ElapsedRuntime
     )
 
     $whatIfText = if ($WhatIfPreference) {
