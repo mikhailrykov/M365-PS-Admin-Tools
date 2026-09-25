@@ -9,7 +9,13 @@
 
     By default, both Litigation Hold and In-Place Hold remediation are enabled.
     Specify only -DisableLitigationHold or only -DisableInPlaceHold to limit
-    remediation to that hold type. Use -DisableAllHolds:$false for report-only mode.
+    remediation to that hold type. Use -DisableAllHolds:$false or -WhatIf for report-only mode.
+
+    Returns a collection of objects representing each unlicensed mailbox with
+    one or more holds. Each result includes the mailbox identity, account status,
+    license count, Litigation Hold details, In-Place Hold details, and the action
+    and status for each remediation attempt. An empty collection is returned when
+    no matching mailboxes are found.
 
     The script:
       * Finds Litigation Hold mailboxes and active In-Place Holds.
