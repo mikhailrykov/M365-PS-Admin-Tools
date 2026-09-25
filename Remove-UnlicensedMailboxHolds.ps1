@@ -929,13 +929,17 @@ try {
 
     if ($sendReport) {
         try {
+            
+            $elapsedRuntimeForReport = Format-ElapsedRuntime -Elapsed $scriptStopwatch.Elapsed
+
             Send-HoldReport `
                 -CsvPath $effectiveCsv `
                 -To $ReportTo `
                 -From $ReportFrom `
                 -Subject $ReportSubject `
                 -Mode $mode `
-                -ResultCount $results.Count
+                -ResultCount $results.Count `
+                -ElapsedRuntime $elapsedRuntimeForReport
 
             Write-Host "[+] Report emailed to: $($ReportTo -join ', ')" -ForegroundColor Green
         }
