@@ -113,6 +113,11 @@ param (
     [switch]$SkipConfirmation
 )
 
+$scriptStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
