@@ -936,5 +936,9 @@ finally {
         -GraphConnectedByScript $graphConnectedByScript `
         -ExchangeConnectedByScript $exchangeConnectedByScript
 
+    $scriptStopwatch.Stop()
+    $finalElapsedRuntime = Format-ElapsedRuntime -Elapsed $scriptStopwatch.Elapsed
+
+    Write-Host "[+] Total script runtime: $finalElapsedRuntime" -ForegroundColor Cyan
     Write-Verbose "=== Script completed: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
 }
