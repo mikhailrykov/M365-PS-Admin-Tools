@@ -123,6 +123,19 @@ $ErrorActionPreference = 'Stop'
 
 #region Prerequisite and connection helpers
 
+function Format-ElapsedRuntime {
+    param(
+        [Parameter(Mandatory)]
+        [timespan]$Elapsed
+    )
+
+    return '{0:00}:{1:00}:{2:00}.{3:000}' -f `
+        [math]::Floor($Elapsed.TotalHours), `
+        $Elapsed.Minutes, `
+        $Elapsed.Seconds, `
+        $Elapsed.Milliseconds
+}
+
 function Assert-PowerShellRequirements {
     if ($PSVersionTable.PSEdition -ne 'Core') {
         throw "PowerShell 7.4 or later is required. Start the script using pwsh.exe."
