@@ -535,7 +535,8 @@ Unlicensed Mailbox Holds Report
 ================================
 Generated : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 Mode      : $Mode
-Results   : $ResultCount unlicensed mailbox(es) with hold(s) found.$whatIfText
+Results   : $ResultCount unlicensed mailbox(es) with hold(s) found.
+Runtime   : $ElapsedRuntime$whatIfText
 
 The attached CSV contains the full report.
 "@
